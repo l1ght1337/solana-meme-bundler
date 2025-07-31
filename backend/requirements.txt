@@ -3,7 +3,6 @@ uvicorn[standard]
 python-dotenv
 asyncpg
 sqlalchemy>=2.0
-alembic
 httpx
 pydantic
 passlib[bcrypt]
