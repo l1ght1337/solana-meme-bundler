@@ -1,7 +1,7 @@
 image: gitpod/workspace-full
 
-# Переменные окружения для упрощённого локального запуска через SQLite
 env:
+  # Лёгкий SQLite для Gitpod
   DATABASE_URL: "sqlite+aiosqlite:///workspace/db.sqlite"
   SOLANA_RPC_URL: "https://api.mainnet-beta.solana.com"
   JWT_SECRET: "UltraSecureJWTSecretKey123!"
@@ -25,7 +25,7 @@ tasks:
   - name: frontend
     init: |
       cd frontend
-      npm install
+      npm ci
     command: |
       cd frontend
       npm run dev
@@ -35,3 +35,6 @@ ports:
     onOpen: open-preview
   - port: 3000
     onOpen: open-preview
+
+prebuild:
+  enabled: true
