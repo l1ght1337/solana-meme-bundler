@@ -1,29 +1,29 @@
 image: gitpod/workspace-full
 
-env:
-  # Лёгкий SQLite для Gitpod
-  DATABASE_URL: "sqlite+aiosqlite:///workspace/db.sqlite"
-  SOLANA_RPC_URL: "https://api.mainnet-beta.solana.com"
-  JWT_SECRET: "UltraSecureJWTSecretKey123!"
-  ADMIN_USER: "admin"
-  ADMIN_PASSWORD: "SuperSecretAdmin123"
-  MM_SECRET_KEY: "any-string-you-like"
-
 tasks:
-  - name: backend
-    init: |
+  # Backend
+  - init: |
+      # настраиваем переменные прямо в сессии
+      export DATABASE_URL="sqlite+aiosqlite:///workspace/db.sqlite"
+      export SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
+      export JWT_SECRET="UltraSecureJWTSecretKey123!"
+      export ADMIN_USER="admin"
+      export ADMIN_PASSWORD="SuperSecretAdmin123"
+      export MM_SECRET_KEY="any-string-you-like"
+
       cd backend
       python3 -m venv .venv
       source .venv/bin/activate
       pip install --upgrade pip setuptools
       pip install --no-cache-dir -r requirements.txt
+
     command: |
       cd backend
       source .venv/bin/activate
       uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-  - name: frontend
-    init: |
+  # Frontend
+  - init: |
       cd frontend
       npm ci
     command: |
@@ -33,8 +33,6 @@ tasks:
 ports:
   - port: 8000
     onOpen: open-preview
+
   - port: 3000
     onOpen: open-preview
-
-prebuild:
-  enabled: true
