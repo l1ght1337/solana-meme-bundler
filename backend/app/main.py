@@ -1,103 +1,213 @@
+import os
+import random
+import asyncio
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI, Depends, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_cache import FastAPICache
-from fastapi_cache.backends.redis import RedisBackend
-import aioredis, os, asyncio, random
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from passlib.context import CryptContext
+import jwt
+
 from solana.keypair import Keypair
+from solana_utils import load_keypair, get_client
 
-from .db import Base, engine, get_db
-from .models import User, Simulator
-from .crud import (
-    list_users, create_user, update_user_role,
-    create_simulator, list_simulators, update_simulator, delete_simulator,
-    record_pnl, get_pnl_summary
+from models import Base
+from crud import (
+    get_user_by_username,
+    list_users,
+    create_user,
+    update_user_role,
+    list_simulators,
+    create_simulator,
+    update_simulator,
+    delete_simulator,
+    get_pnl_summary,
 )
-from .auth import create_access_token, get_current_user, require_roles
-from .schemas import Token, UserCreate, UserOut, PnLSummary
-from .simulator import seed_and_start
+from schemas import Token, UserCreate, UserOut, PnLSummary
+from simulator import run_simulator_loop
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# --- Настройки и инициализация ---
 
+# База на SQLite (Gitpod-friendly)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///workspace/db.sqlite")
+engine = create_async_engine(DATABASE_URL, future=True, echo=False)
+AsyncSessionLocal = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+# Auth / JWT
+JWT_SECRET = os.getenv("JWT_SECRET", "UltraSecureJWTSecretKey123!")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_MINUTES = 60
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+app = FastAPI(title="Solana Meme-Bundler API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Зависимость для сессии
+async def get_db():
+    async with AsyncSessionLocal() as db:
+        yield db
+
+# Функция для создания JWT
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=JWT_EXPIRE_MINUTES))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+# Получить текущего пользователя из токена
+async def get_current_user(
+    token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        username: str = payload.get("sub")
+        role: str = payload.get("role")
+        if not username or not role:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = await get_user_by_username(db, username)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    user.role = role
+    return user
+
+# Ограничитель ролей
+def require_roles(*roles: str):
+    async def checker(user = Depends(get_current_user)):
+        if user.role not in roles:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return user
+    return Depends(checker)
+
+# При старте создаём таблицы и админа, запускаем симуляторы
 @app.on_event("startup")
 async def on_startup():
+    # Создание таблиц
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    redis = await aioredis.from_url(os.getenv("REDIS_URL"), encoding="utf8", decode_responses=True)
-    FastAPICache.init(RedisBackend(redis), prefix="cache")
-    async for db in get_db():
-        if not await list_users(db):
-            await create_user(db, os.getenv("ADMIN_USER"), os.getenv("ADMIN_PASSWORD"), "admin")
-        await seed_and_start(db)
 
-# --- Auth ---
+    # Создание админа, если нет пользователей
+    async with AsyncSessionLocal() as db:
+        users = await list_users(db)
+        if not users:
+            await create_user(
+                db,
+                os.getenv("ADMIN_USER", "admin"),
+                os.getenv("ADMIN_PASSWORD", "SuperSecretAdmin123"),
+                role="admin",
+            )
+    # Запуск фонового цикла симуляторов
+    asyncio.create_task(run_simulator_loop())
+
+# --- Эндпоинты ---
+
 @app.post("/token", response_model=Token)
-async def login(form_data=Depends(...), db: AsyncSession=Depends(get_db)):
-    # здесь проверка пароля опущена для краткости
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
     user = await get_user_by_username(db, form_data.username)
-    if not user:
-        raise HTTPException(400, "Invalid credentials")
+    if not user or not pwd_ctx.verify(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Invalid credentials")
     token = create_access_token({"sub": user.username, "role": user.role})
     return {"access_token": token, "token_type": "bearer"}
 
-@app.post("/users", response_model=UserOut, dependencies=[Depends(require_roles("admin"))])
-async def create_new_user(u: UserCreate, db: AsyncSession = Depends(get_db)):
+@app.post(
+    "/users",
+    response_model=UserOut,
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def create_new_user(
+    u: UserCreate, db: AsyncSession = Depends(get_db)
+):
     return await create_user(db, u.username, u.password, u.role)
 
-@app.get("/users", response_model=list[UserOut], dependencies=[Depends(require_roles("admin"))])
-async def get_all_users(db: AsyncSession = Depends(get_db)):
+@app.get(
+    "/users",
+    response_model=list[UserOut],
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def read_users(db: AsyncSession = Depends(get_db)):
     return await list_users(db)
 
-@app.patch("/users/{uid}/role", response_model=UserOut, dependencies=[Depends(require_roles("admin"))])
-async def change_role(uid: int, new_role: str = Body(...), db: AsyncSession = Depends(get_db)):
-    return await update_user_role(db, uid, new_role)
+@app.patch(
+    "/users/{user_id}/role",
+    response_model=UserOut,
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def change_role(
+    user_id: int, new_role: str = Body(...), db: AsyncSession = Depends(get_db)
+):
+    return await update_user_role(db, user_id, new_role)
 
-# Main wallet balance
-@app.get("/main-wallet/balance", dependencies=[Depends(get_current_user)])
-async def main_balance():
-    sk = os.getenv("MM_SECRET_KEY", "")
-    if not sk:
-        raise HTTPException(500, "Main key not set")
-    from .solana_utils import load_keypair, get_client
-    kp = load_keypair(sk)
-    cli = await get_client()
-    bal = await cli.get_balance(kp.public_key)
-    await cli.close()
-    return {"balance_sol": bal['result']['value'] / 1e9}
+@app.get(
+    "/main-wallet/balance",
+    dependencies=[Depends(get_current_user)],
+)
+async def main_wallet_balance():
+    seed = os.getenv("MM_SECRET_KEY")
+    if not seed:
+        raise HTTPException(status_code=500, detail="Main wallet key not set")
+    kp = load_keypair(seed)
+    client = await get_client()
+    resp = await client.get_balance(kp.public_key)
+    await client.close()
+    return {"balance_sol": resp["result"]["value"] / 1e9}
 
-# --- Simulators CRUD & fund ---
-@app.get("/simulators", dependencies=[Depends(require_roles("admin","trader"))])
-async def read_sims(db: AsyncSession = Depends(get_db)):
+@app.get(
+    "/simulators",
+    dependencies=[Depends(require_roles("admin", "trader"))],
+)
+async def get_sims(db: AsyncSession = Depends(get_db)):
     return await list_simulators(db)
 
-@app.post("/simulators", dependencies=[Depends(require_roles("admin","trader"))])
-async def add_sim(db: AsyncSession = Depends(get_db)):
+@app.post(
+    "/simulators",
+    dependencies=[Depends(require_roles("admin", "trader"))],
+)
+async def add_simulator(db: AsyncSession = Depends(get_db)):
     kp = Keypair()
-    sk = kp.secret_key.hex()
-    pub= kp.public_key.to_base58()
-    sim = await create_simulator(db, f"Trader{random.randint(1000,9999)}", sk, pub)
-    asyncio.create_task(seed_and_start(db))
+    sim = await create_simulator(
+        db,
+        name=f"Trader{random.randint(1000,9999)}",
+        secret_key=kp.secret_key.hex(),
+        public_key=kp.public_key.to_base58().decode(),
+    )
     return sim
 
-@app.patch("/simulators/{sid}", dependencies=[Depends(require_roles("admin","trader"))])
-async def edit_sim(sid: int, fields: dict = Body(...), db: AsyncSession = Depends(get_db)):
-    await update_simulator(db, sid, **fields)
-    return {"id": sid, **fields}
+@app.patch(
+    "/simulators/{sim_id}",
+    dependencies=[Depends(require_roles("admin", "trader"))],
+)
+async def patch_sim(
+    sim_id: int, data: dict = Body(...), db: AsyncSession = Depends(get_db)
+):
+    await update_simulator(db, sim_id, **data)
+    return {"status": "ok"}
 
-@app.delete("/simulators/{sid}", dependencies=[Depends(require_roles("admin","trader"))])
-async def del_sim(sid: int, db: AsyncSession = Depends(get_db)):
-    await delete_simulator(db, sid)
-    return {"deleted": sid}
+@app.delete(
+    "/simulators/{sim_id}",
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def remove_sim(sim_id: int, db: AsyncSession = Depends(get_db)):
+    await delete_simulator(db, sim_id)
+    return {"status": "deleted"}
 
-# --- PnL summary ---
-@app.get("/pnl-summary", response_model=PnLSummary, dependencies=[Depends(require_roles("admin","trader"))])
-@FastAPICache.decorator(expire=30)
-async def pnl_summary(db: AsyncSession = Depends(get_db)):
+@app.get(
+    "/pnl",
+    response_model=PnLSummary,
+    dependencies=[Depends(require_roles("admin", "trader"))],
+)
+async def pnl(db: AsyncSession = Depends(get_db)):
     total, per = await get_pnl_summary(db)
     return PnLSummary(total_realized_pnl=total, per_simulator=per)
-
-# Include websocket router
-from .websocket import router as ws_router
-app.include_router(ws_router)
-
