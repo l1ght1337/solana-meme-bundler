@@ -19,9 +19,9 @@ export function LoginForm() {
 
   return (
     <div className="p-4">
-      <input placeholder="Username" value={user} onChange={e=>setUser(e.target.value)}/>
-      <input placeholder="Password" type="password" value={pass} onChange={e=>setPass(e.target.value)}/>
-      <button onClick={login}>Login</button>
+      <input placeholder="Username" value={user} onChange={e=>setUser(e.target.value)} className="block mb-2"/>
+      <input placeholder="Password" type="password" value={pass} onChange={e=>setPass(e.target.value)} className="block mb-4"/>
+      <button onClick={login} className="px-4 py-2 bg-blue-500 text-white rounded">Login</button>
     </div>
   );
 }
