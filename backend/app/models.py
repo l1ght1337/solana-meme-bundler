@@ -32,3 +32,4 @@ class PnLMetrics(Base):
     realized_pnl  = Column(Float)
     timestamp     = Column(DateTime, default=datetime.datetime.utcnow)
     simulator     = relationship("Simulator")
+
