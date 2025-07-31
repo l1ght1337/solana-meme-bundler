@@ -1,22 +1,16 @@
-{
-  "name": "meme-ui",
-  "private": true,
-  "scripts": {
-    "dev": "next dev -p 3000",
-    "build": "next build",
-    "start": "next start -p 3000"
-  },
-  "dependencies": {
-    "next": "13.4.0",
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
-    "@solana/wallet-adapter-base": "0.9.0",
-    "@solana/wallet-adapter-react": "0.17.0",
-    "@solana/wallet-adapter-wallets": "0.17.0",
-    "@solana/wallet-adapter-react-ui": "0.17.0",
-    "@solana/web3.js": "1.78.0",
-    "axios": "1.3.0",
-    "recharts": "2.3.2",
-    "tailwindcss": "3.3.0"
-  }
-}
+ {
+   "dependencies": {
+-    "@solana/wallet-adapter-base": "^0.12.0",
+-    "@solana/wallet-adapter-react": "^0.17.0",         // <-- убираем 0.17.0
+-    "@solana/wallet-adapter-react-ui": "^0.12.0",
+-    "@solana/wallet-adapter-wallets": "^0.17.0",
++    "@solana/wallet-adapter-base": "^0.17.0",
++    "@solana/wallet-adapter-react": "^0.15.39",         // <-- «живой» выпуск :contentReference[oaicite:0]{index=0}
++    "@solana/wallet-adapter-react-ui": "^0.9.39",       // соответствующая версия :contentReference[oaicite:1]{index=1}
++    "@solana/wallet-adapter-wallets": "^0.19.37",
+     "@solana/web3.js": "^1.83.0",
+     "react": "^18.2.0",
+     "next": "13.5.3",
+     // …остальные зависимости без изменений…
+   }
+ }
