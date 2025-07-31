@@ -47,7 +47,7 @@ async def delete_simulator(db: AsyncSession, sim_id: int):
     await db.commit()
 
 # PnL
-async def record_pnl(db: AsyncSession, sim_id: Optional[int], pnl: float):
+async def record_pnl(db: AsyncSession, sim_id: int, pnl: float):
     rec = PnLMetrics(simulator_id=sim_id, realized_pnl=pnl)
     db.add(rec); await db.commit()
 
@@ -58,3 +58,4 @@ async def get_pnl_summary(db: AsyncSession):
         .group_by(PnLMetrics.simulator_id)
     )
     return total, dict(per.all())
+
